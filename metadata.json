@@ -1,0 +1,8 @@
+{
+  "name": "ScreenTranslate",
+  "description": "On-device floating screen translator for Android (English to Arabic) with OCR and seamless text overlay.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

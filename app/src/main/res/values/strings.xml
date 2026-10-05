@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ScreenTranslate</string>
+    <string name="notification_channel_name">ScreenTranslate Service</string>
+    <string name="notification_channel_description">Used for background screen capture and overlay service</string>
+    <string name="notification_title">ScreenTranslate is active</string>
+    <string name="notification_text">Tap the floating button to translate the screen</string>
+    <string name="notification_action_stop">Stop</string>
+</resources>
