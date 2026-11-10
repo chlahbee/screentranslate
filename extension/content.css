@@ -1,0 +1,116 @@
+.screentranslate-action,
+.screentranslate-panel,
+.screentranslate-selection-layer,
+.screentranslate-image-result {
+  all: initial;
+  box-sizing: border-box;
+  font-family: Arial, sans-serif;
+  z-index: 2147483647;
+}
+
+.screentranslate-selection-layer {
+  position: fixed;
+  inset: 0;
+  display: block;
+  cursor: crosshair;
+  background: #0f172a33;
+  pointer-events: auto;
+}
+
+.screentranslate-selection-help {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  padding: 10px 14px;
+  border-radius: 9px;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: #fff;
+  font: 600 13px Arial, sans-serif;
+}
+
+.screentranslate-selection-box {
+  position: fixed;
+  display: none;
+  border: 2px solid #2563eb;
+  background: #2563eb26;
+}
+
+.screentranslate-image-result {
+  position: fixed;
+  overflow: auto;
+  padding: 12px;
+  border: 2px solid #2563eb;
+  border-radius: 6px;
+  background: #eff6ffeb;
+  color: #0f172a;
+  font: 600 18px/1.5 Arial, sans-serif;
+  direction: auto;
+  cursor: pointer;
+  box-shadow: 0 3px 14px #0f172a66;
+}
+
+.screentranslate-action {
+  position: absolute;
+  padding: 8px 13px;
+  border: 0;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font: 600 13px Arial, sans-serif;
+  box-shadow: 0 4px 16px #0005;
+}
+
+.screentranslate-action:hover {
+  background: #1d4ed8;
+}
+
+.screentranslate-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(720px, calc(100vh - 32px));
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: #fff;
+  color: #0f172a;
+  box-shadow: 0 16px 50px #0f172a66;
+  transform: translate(-50%, -50%);
+}
+
+.screentranslate-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  color: #1d4ed8;
+  font: 700 12px Arial, sans-serif;
+}
+
+.screentranslate-close {
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font: 24px/16px Arial, sans-serif;
+}
+
+.screentranslate-original {
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #64748b;
+  font: 14px/1.55 Arial, sans-serif;
+  white-space: pre-wrap;
+}
+
+.screentranslate-translation {
+  padding-top: 12px;
+  direction: auto;
+  color: #0f172a;
+  font: 19px/1.65 Arial, sans-serif;
+  white-space: pre-wrap;
+}

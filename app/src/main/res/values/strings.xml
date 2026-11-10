@@ -4,6 +4,9 @@
     <string name="notification_channel_name">ScreenTranslate Service</string>
     <string name="notification_channel_description">Used for background screen capture and overlay service</string>
     <string name="notification_title">ScreenTranslate is active</string>
-    <string name="notification_text">Tap the floating button to translate the screen</string>
+    <string name="notification_text">Tap floating button or notification actions to translate</string>
     <string name="notification_action_stop">Stop</string>
+    <string name="notification_action_translate">Translate</string>
+    <string name="notification_action_hide_button">Hide Button</string>
+    <string name="notification_action_show_button">Show Button</string>
 </resources>

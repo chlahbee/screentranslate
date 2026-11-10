@@ -9,6 +9,8 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
@@ -24,6 +26,7 @@ import kotlin.math.hypot
 class FloatingButtonView(context: Context) : View(context) {
 
     var onTranslateClick: (() -> Unit)? = null
+    var onLongPress: (() -> Unit)? = null
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -52,6 +55,14 @@ class FloatingButtonView(context: Context) : View(context) {
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
+    private var longPressTriggered = false
+    private val touchHandler = Handler(Looper.getMainLooper())
+    private val longPressRunnable = Runnable {
+        if (!isDragging) {
+            longPressTriggered = true
+            onLongPress?.invoke()
+        }
+    }
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
     init {
@@ -88,6 +99,11 @@ class FloatingButtonView(context: Context) : View(context) {
         visibility = VISIBLE
     }
 
+    override fun onDetachedFromWindow() {
+        touchHandler.removeCallbacks(longPressRunnable)
+        super.onDetachedFromWindow()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val cx = width / 2f
@@ -122,6 +138,8 @@ class FloatingButtonView(context: Context) : View(context) {
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 isDragging = false
+                longPressTriggered = false
+                touchHandler.postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
                 return true
             }
 
@@ -131,6 +149,7 @@ class FloatingButtonView(context: Context) : View(context) {
 
                 if (!isDragging && hypot(dx.toDouble(), dy.toDouble()) > touchSlop) {
                     isDragging = true
+                    touchHandler.removeCallbacks(longPressRunnable)
                 }
 
                 if (isDragging) {
@@ -142,10 +161,13 @@ class FloatingButtonView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_UP -> {
+                touchHandler.removeCallbacks(longPressRunnable)
                 val dx = event.rawX - initialTouchX
                 val dy = event.rawY - initialTouchY
 
-                if (!isDragging && hypot(dx.toDouble(), dy.toDouble()) <= touchSlop) {
+                if (longPressTriggered) {
+                    return true
+                } else if (!isDragging && hypot(dx.toDouble(), dy.toDouble()) <= touchSlop) {
                     Log.d(Constants.TAG, "Floating button tapped")
                     onTranslateClick?.invoke()
                 } else {
@@ -155,6 +177,7 @@ class FloatingButtonView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                touchHandler.removeCallbacks(longPressRunnable)
                 if (isDragging) {
                     snapToEdge()
                 }

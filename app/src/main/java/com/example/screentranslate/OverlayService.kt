@@ -5,11 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.RectF
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
@@ -18,9 +20,11 @@ import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.service.quicksettings.TileService
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -41,8 +45,15 @@ class OverlayService : Service() {
     companion object {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
+        const val ACTION_TOGGLE_BUTTON = "ACTION_TOGGLE_BUTTON"
+        const val ACTION_TRANSLATE_NOW = "ACTION_TRANSLATE_NOW"
         const val EXTRA_RESULT_CODE = "EXTRA_RESULT_CODE"
         const val EXTRA_DATA = "EXTRA_DATA"
+
+        var isRunning = false
+            private set
+        var isButtonHidden = false
+            private set
     }
 
     private var mediaProjection: MediaProjection? = null
@@ -51,6 +62,8 @@ class OverlayService : Service() {
     private var floatingButton: FloatingButtonView? = null
     private var windowManager: WindowManager? = null
     private var currentOverlayView: TranslationOverlayView? = null
+    private var selectionOverlayView: SelectionOverlayView? = null
+    private var isFloatingButtonHidden = false
 
     private var screenWidth = 0
     private var screenHeight = 0
@@ -81,6 +94,30 @@ class OverlayService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_TOGGLE_BUTTON -> {
+                isFloatingButtonHidden = !isFloatingButtonHidden
+                isButtonHidden = isFloatingButtonHidden
+                if (isFloatingButtonHidden) {
+                    floatingButton?.visibility = View.GONE
+                    Toast.makeText(this, "Floating button hidden", Toast.LENGTH_SHORT).show()
+                } else {
+                    if (floatingButton == null) {
+                        showFloatingButton()
+                    }
+                    floatingButton?.visibility = View.VISIBLE
+                    Toast.makeText(this, "Floating button active", Toast.LENGTH_SHORT).show()
+                }
+                updateNotification()
+                requestQSTileUpdate()
+                return START_STICKY
+            }
+            ACTION_TRANSLATE_NOW -> {
+                closeNotificationShade()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    captureAndTranslate()
+                }, 300)
+                return START_STICKY
+            }
             ACTION_START -> {
                 val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
                 val data = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -94,46 +131,119 @@ class OverlayService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                isRunning = true
+                isButtonHidden = false
+                isFloatingButtonHidden = false
                 startForegroundWithNotification()
                 setupMediaProjection(resultCode, data)
                 showFloatingButton()
+                requestQSTileUpdate()
             }
         }
         return START_STICKY
     }
 
-    private fun startForegroundWithNotification() {
+    private fun buildNotification(): android.app.Notification {
         val channelId = Constants.NOTIFICATION_CHANNEL_ID
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(channelId, "ScreenTranslate", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
 
+        val translateIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_TRANSLATE_NOW }
+        val translatePending = PendingIntent.getService(
+            this, 2, translateIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val toggleIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_TOGGLE_BUTTON }
+        val togglePending = PendingIntent.getService(
+            this, 3, toggleIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val stopIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_STOP }
-        val stopPending = PendingIntent.getService(this, 1, stopIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stopPending = PendingIntent.getService(
+            this, 1, stopIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
-        val notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ScreenTranslate is active")
-            .setContentText("Tap floating button to translate")
-            .setSmallIcon(R.drawable.ic_notification)
-            .addAction(0, "Stop", stopPending)
-            .setOngoing(true)
-            .build()
+        val mainIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val mainPending = PendingIntent.getActivity(
+            this, 0, mainIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(1, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        val toggleLabel = if (isFloatingButtonHidden) "Show Button" else "Hide Button"
+        val contentText = if (isFloatingButtonHidden) {
+            "Floating button hidden. Tap 'Translate' or 'Show Button'."
         } else {
-            startForeground(1, notification)
+            "Tap floating button or notification actions to translate"
+        }
+
+        return NotificationCompat.Builder(this, channelId)
+            .setContentTitle("ScreenTranslate is active")
+            .setContentText(contentText)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentIntent(mainPending)
+            .setOngoing(true)
+            .addAction(0, "Translate", translatePending)
+            .addAction(0, toggleLabel, togglePending)
+            .addAction(0, "Stop", stopPending)
+            .build()
+    }
+
+    private fun startForegroundWithNotification() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(Constants.NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
+        } else {
+            startForeground(Constants.NOTIFICATION_ID, notification)
         }
         Log.d(Constants.LOG_TAG, "ST: service started foreground")
     }
 
+    private fun updateNotification() {
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.notify(Constants.NOTIFICATION_ID, buildNotification())
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun closeNotificationShade() {
+        try {
+            @Suppress("DEPRECATION")
+            val closeIntent = Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS)
+            sendBroadcast(closeIntent)
+        } catch (e: Exception) {
+            Log.e(Constants.LOG_TAG, "ST: error closing notification shade", e)
+        }
+    }
+
+    private fun restoreFloatingButtonIfNeeded() {
+        if (!isFloatingButtonHidden) {
+            floatingButton?.showAgain()
+        }
+    }
+
     private fun setupMediaProjection(resultCode: Int, data: Intent) {
+        // Safely cleanup previous displays and image readers before re-creating
+        try {
+            virtualDisplay?.release()
+            imageReader?.close()
+            mediaProjection?.stop()
+        } catch (e: Exception) {
+            Log.e(Constants.LOG_TAG, "ST: error releasing existing projection", e)
+        }
+
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         windowManager?.defaultDisplay?.getRealMetrics(metrics)
+
+        // Always query maximumWindowMetrics on Android 11+ to get full physical display resolution
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val bounds = windowManager?.currentWindowMetrics?.bounds
+            val bounds = windowManager?.maximumWindowMetrics?.bounds
             if (bounds != null) {
                 screenWidth = bounds.width()
                 screenHeight = bounds.height()
@@ -170,8 +280,56 @@ class OverlayService : Service() {
         if (floatingButton != null) return
         floatingButton = FloatingButtonView(this).apply {
             onTranslateClick = { captureAndTranslate() }
+            onLongPress = { startAreaSelection() }
         }
         windowManager?.addView(floatingButton, floatingButton?.layoutParams)
+    }
+
+    private fun startAreaSelection() {
+        if (selectionOverlayView != null) return
+        removeCurrentOverlay()
+        floatingButton?.hideTemporarily()
+        selectionOverlayView = SelectionOverlayView(this) { selection ->
+            removeSelectionOverlay()
+            if (selection == null) {
+                Toast.makeText(this, "Select a larger area to translate", Toast.LENGTH_SHORT).show()
+                restoreFloatingButtonIfNeeded()
+            } else {
+                captureAndTranslate(selection)
+            }
+        }
+        val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+        val layoutParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            layoutFlag,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        windowManager?.addView(selectionOverlayView, layoutParams)
+    }
+
+    private fun removeSelectionOverlay() {
+        selectionOverlayView?.let { view ->
+            try {
+                windowManager?.removeView(view)
+            } catch (e: Exception) {
+                Log.e(Constants.LOG_TAG, "ST: error removing selection overlay", e)
+            }
+        }
+        selectionOverlayView = null
     }
 
     private fun removeCurrentOverlay() {
@@ -185,7 +343,56 @@ class OverlayService : Service() {
         currentOverlayView = null
     }
 
-    private fun captureAndTranslate() {
+    private data class ProcessedBlock(
+        val rect: Rect,
+        val text: String
+    )
+
+    private fun groupAndMergeBlocks(blocks: List<com.google.mlkit.vision.text.Text.TextBlock>): List<ProcessedBlock> {
+        if (blocks.isEmpty()) return emptyList()
+
+        val valid = blocks.mapNotNull { b ->
+            val rect = b.boundingBox ?: return@mapNotNull null
+            val cleaned = b.text.replace("\n", " ").trim()
+            if (cleaned.isBlank() || TextEnhancer.isMetadata(cleaned)) return@mapNotNull null
+            ProcessedBlock(rect, cleaned)
+        }.sortedWith(compareBy<ProcessedBlock> { it.rect.top }.thenBy { it.rect.left })
+
+        if (valid.isEmpty()) return emptyList()
+
+        val merged = mutableListOf<ProcessedBlock>()
+        var current = valid[0]
+
+        for (i in 1 until valid.size) {
+            val next = valid[i]
+            val verticalGap = next.rect.top - current.rect.bottom
+            val horizontalOverlap = maxOf(0, minOf(current.rect.right, next.rect.right) - maxOf(current.rect.left, next.rect.left))
+            val minWidth = minOf(current.rect.width(), next.rect.width())
+
+            val maxContinuationGap = maxOf(32, current.rect.height() / 2)
+            val isVerticallyClose = verticalGap in -25..maxContinuationGap
+            val isHorizontallyAligned = minWidth > 0 && (horizontalOverlap.toFloat() / minWidth.toFloat()) > 0.35f
+            val currentSentenceIsIncomplete = !current.text.matches(Regex(""".*[.!?…]["'’”)\]]*$"""))
+
+            if (isVerticallyClose && isHorizontallyAligned && currentSentenceIsIncomplete) {
+                val combinedRect = Rect(
+                    minOf(current.rect.left, next.rect.left),
+                    current.rect.top,
+                    maxOf(current.rect.right, next.rect.right),
+                    maxOf(current.rect.bottom, next.rect.bottom)
+                )
+                val combinedText = current.text + " " + next.text
+                current = ProcessedBlock(combinedRect, combinedText)
+            } else {
+                merged.add(current)
+                current = next
+            }
+        }
+        merged.add(current)
+        return merged
+    }
+
+    private fun captureAndTranslate(selection: RectF? = null) {
         removeCurrentOverlay()
         floatingButton?.hideTemporarily()
 
@@ -194,7 +401,7 @@ class OverlayService : Service() {
                 val image = imageReader?.acquireLatestImage()
                 if (image == null) {
                     Toast.makeText(this, "Try again, capturing frame...", Toast.LENGTH_SHORT).show()
-                    floatingButton?.showAgain()
+                    restoreFloatingButtonIfNeeded()
                     return@postDelayed
                 }
 
@@ -212,74 +419,135 @@ class OverlayService : Service() {
                 bitmap.copyPixelsFromBuffer(buffer)
                 image.close()
 
-                val croppedBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
+                val screenBitmap = Bitmap.createBitmap(bitmap, 0, 0, screenWidth, screenHeight)
                 bitmap.recycle()
 
-                val inputImage = InputImage.fromBitmap(croppedBitmap, 0)
+                val captureRect = selection?.let {
+                    Rect(
+                        (it.left * screenWidth).toInt().coerceIn(0, screenWidth),
+                        (it.top * screenHeight).toInt().coerceIn(0, screenHeight),
+                        (it.right * screenWidth).toInt().coerceIn(0, screenWidth),
+                        (it.bottom * screenHeight).toInt().coerceIn(0, screenHeight)
+                    )
+                } ?: Rect(0, 0, screenWidth, screenHeight)
+
+                if (captureRect.width() <= 0 || captureRect.height() <= 0) {
+                    screenBitmap.recycle()
+                    Toast.makeText(this, "Selected area is too small", Toast.LENGTH_SHORT).show()
+                    restoreFloatingButtonIfNeeded()
+                    return@postDelayed
+                }
+
+                val capturedBitmap = if (selection == null) {
+                    screenBitmap
+                } else {
+                    Bitmap.createBitmap(
+                        screenBitmap,
+                        captureRect.left,
+                        captureRect.top,
+                        captureRect.width(),
+                        captureRect.height()
+                    ).also { screenBitmap.recycle() }
+                }
+
+                val inputImage = InputImage.fromBitmap(capturedBitmap, 0)
                 textRecognizer.process(inputImage)
                     .addOnSuccessListener { visionText ->
                         val blocks = visionText.textBlocks
                         if (blocks.isEmpty()) {
                             Toast.makeText(this, "No text detected on screen", Toast.LENGTH_SHORT).show()
-                            floatingButton?.showAgain()
-                            croppedBitmap.recycle()
+                            restoreFloatingButtonIfNeeded()
+                            capturedBitmap.recycle()
                             return@addOnSuccessListener
                         }
 
-                        val itemsToTranslate = blocks.mapNotNull { block ->
-                            val rect = block.boundingBox
-                            // Combine lines into single continuous paragraph for accurate translation
-                            val cleanedText = block.text.replace("\n", " ").trim()
-                            if (rect != null && cleanedText.isNotBlank() && !TextEnhancer.isMetadata(cleanedText)) {
-                                val enhancedText = TextEnhancer.enhance(cleanedText)
-                                Pair(rect, enhancedText)
-                            } else null
-                        }
-
-                        if (itemsToTranslate.isEmpty()) {
+                        val mergedBlocks = groupAndMergeBlocks(blocks)
+                        if (mergedBlocks.isEmpty()) {
                             Toast.makeText(this, "No text detected on screen", Toast.LENGTH_SHORT).show()
-                            floatingButton?.showAgain()
-                            croppedBitmap.recycle()
+                            restoreFloatingButtonIfNeeded()
+                            capturedBitmap.recycle()
                             return@addOnSuccessListener
                         }
 
-                        // Use coroutines to sequence translations and prioritize Cloud Google Translate
+                        val itemsToTranslate = mergedBlocks.map { block ->
+                            val enhancedText = TextEnhancer.enhance(block.text)
+                            val screenRect = Rect(block.rect).apply {
+                                offset(captureRect.left, captureRect.top)
+                            }
+                            Pair(screenRect, enhancedText)
+                        }
+
+                        // Translate each merged OCR block using the user's selected mode.
                         CoroutineScope(Dispatchers.Main).launch {
                             val translatedItems = mutableListOf<TranslatedItem>()
+                            val translationMode = if (
+                                getSharedPreferences(TranslationMode.PREFERENCES_NAME, Context.MODE_PRIVATE)
+                                    .getString(TranslationMode.PREFERENCE_MODE, TranslationMode.ONLINE.name) ==
+                                TranslationMode.OFFLINE.name
+                            ) {
+                                TranslationMode.OFFLINE
+                            } else {
+                                TranslationMode.ONLINE
+                            }
+                            var hadTranslationFailure = false
                             
                             for ((rect, originalText) in itemsToTranslate) {
                                 try {
-                                    // 1. Try Google Translate API (Cloud)
-                                    var arabicText = GoogleTranslateService.translate(originalText)
-                                    
-                                    // 2. Fallback to ML Kit (Offline)
-                                    if (arabicText == null) {
-                                        arabicText = translator.translate(originalText).await()
+                                    val arabicText = if (translationMode == TranslationMode.OFFLINE) {
+                                        translator.translate(originalText).await()
+                                    } else {
+                                        GoogleTranslateService.translate(originalText)
+                                            ?: translator.translate(originalText).await()
                                     }
                                     
-                                    translatedItems.add(TranslatedItem(rect, originalText, arabicText ?: originalText))
+                                    translatedItems.add(
+                                        TranslatedItem(
+                                            rect = rect,
+                                            originalText = originalText,
+                                            translatedText = arabicText ?: originalText,
+                                            imageWidth = screenWidth,
+                                            imageHeight = screenHeight
+                                        )
+                                    )
                                 } catch (e: Exception) {
                                     Log.e(Constants.LOG_TAG, "ST: Translation failed", e)
-                                    translatedItems.add(TranslatedItem(rect, originalText, originalText))
+                                    hadTranslationFailure = true
+                                    translatedItems.add(
+                                        TranslatedItem(
+                                            rect = rect,
+                                            originalText = originalText,
+                                            translatedText = originalText,
+                                            imageWidth = screenWidth,
+                                            imageHeight = screenHeight
+                                        )
+                                    )
                                 }
                             }
                             
                             showTranslationOverlay(translatedItems)
-                            floatingButton?.showAgain()
-                            croppedBitmap.recycle()
+                            if (hadTranslationFailure) {
+                                val message = if (translationMode == TranslationMode.OFFLINE) {
+                                    "Offline translation unavailable. Download the English-Arabic model."
+                                } else {
+                                    "Some text could not be translated. Check your connection or offline model."
+                                }
+                                Toast.makeText(this@OverlayService, message, Toast.LENGTH_LONG).show()
+                            }
+                            restoreFloatingButtonIfNeeded()
+                            capturedBitmap.recycle()
                         }
                     }
                     .addOnFailureListener { e ->
                         Log.e(Constants.LOG_TAG, "ST: OCR failed", e)
                         Toast.makeText(this, "Text recognition failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                        floatingButton?.showAgain()
-                        croppedBitmap.recycle()
+                        restoreFloatingButtonIfNeeded()
+                        capturedBitmap.recycle()
                     }
 
             } catch (e: Exception) {
                 Log.e(Constants.LOG_TAG, "ST: capture exception", e)
                 Toast.makeText(this, "Capture failed: ${e.message}", Toast.LENGTH_SHORT).show()
-                floatingButton?.showAgain()
+                restoreFloatingButtonIfNeeded()
             }
         }, 150)
     }
@@ -313,9 +581,24 @@ class OverlayService : Service() {
         windowManager?.addView(overlayView, layoutParams)
     }
 
+    private fun requestQSTileUpdate() {
+        try {
+            TileService.requestListeningState(
+                this,
+                ComponentName(this, ScreenTranslateTileService::class.java)
+            )
+        } catch (e: Exception) {
+            Log.e(Constants.LOG_TAG, "ST: error updating QS tile", e)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        isRunning = false
+        isButtonHidden = false
+        requestQSTileUpdate()
         removeCurrentOverlay()
+        removeSelectionOverlay()
         try {
             floatingButton?.let { windowManager?.removeView(it) }
         } catch (_: Exception) {}

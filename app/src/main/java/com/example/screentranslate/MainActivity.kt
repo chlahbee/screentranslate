@@ -17,6 +17,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -133,8 +135,26 @@ fun ScreenTranslateOnboarding(
 
     var isModelDownloaded by remember { mutableStateOf(false) }
     var isDownloadingModel by remember { mutableStateOf(false) }
+    val translationPreferences = remember(context) {
+        context.getSharedPreferences(TranslationMode.PREFERENCES_NAME, Context.MODE_PRIVATE)
+    }
+    var translationMode by remember {
+        mutableStateOf(
+            TranslationMode.values().firstOrNull {
+                it.name == translationPreferences.getString(TranslationMode.PREFERENCE_MODE, null)
+            } ?: TranslationMode.ONLINE
+        )
+    }
+
+    fun chooseTranslationMode(mode: TranslationMode) {
+        translationMode = mode
+        translationPreferences.edit()
+            .putString(TranslationMode.PREFERENCE_MODE, mode.name)
+            .apply()
+    }
 
     LaunchedEffect(Unit) {
+        isDownloadingModel = true
         val options = TranslatorOptions.Builder()
             .setSourceLanguage(TranslateLanguage.ENGLISH)
             .setTargetLanguage(TranslateLanguage.ARABIC)
@@ -148,8 +168,13 @@ fun ScreenTranslateOnboarding(
                 isModelDownloaded = true
                 isDownloadingModel = false
             }
-            .addOnFailureListener {
+            .addOnFailureListener { error ->
                 isDownloadingModel = false
+                Toast.makeText(
+                    context,
+                    "Could not prepare offline translation: ${error.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
     }
 
@@ -226,6 +251,12 @@ fun ScreenTranslateOnboarding(
                 color = Color(0xFF94A3B8),
                 modifier = Modifier.padding(top = 4.dp)
             )
+            Text(
+                text = "Tap the floating button to translate the screen, or press and hold to select an area.",
+                fontSize = 12.sp,
+                color = Color(0xFF94A3B8),
+                modifier = Modifier.padding(top = 8.dp)
+            )
 
             Spacer(modifier = Modifier.height(28.dp))
 
@@ -257,6 +288,67 @@ fun ScreenTranslateOnboarding(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "Translation mode",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Choose how recognized text is translated.",
+                        fontSize = 13.sp,
+                        color = Color(0xFF94A3B8),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { chooseTranslationMode(TranslationMode.ONLINE) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = translationMode == TranslationMode.ONLINE,
+                            onClick = { chooseTranslationMode(TranslationMode.ONLINE) }
+                        )
+                        Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                            Text("Online (recommended)", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Uses Google Translate first; recognized text is sent online. Falls back to the on-device model.",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { chooseTranslationMode(TranslationMode.OFFLINE) },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = translationMode == TranslationMode.OFFLINE,
+                            onClick = { chooseTranslationMode(TranslationMode.OFFLINE) }
+                        )
+                        Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+                            Text("Offline (private)", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "Uses the downloaded on-device model only; recognized text is not sent for translation.",
+                                fontSize = 12.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Step 3: Arabic Offline Model Download Card
             Card(
@@ -352,7 +444,8 @@ fun ScreenTranslateOnboarding(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            val canStart = hasOverlayPermission && hasNotificationPermission
+            val offlineModelReady = translationMode != TranslationMode.OFFLINE || isModelDownloaded
+            val canStart = hasOverlayPermission && hasNotificationPermission && offlineModelReady
 
             Button(
                 onClick = {
@@ -371,7 +464,12 @@ fun ScreenTranslateOnboarding(
                     .height(54.dp)
             ) {
                 Text(
-                    text = if (canStart) "Start ScreenTranslate" else "Grant Permissions to Continue",
+                    text = when {
+                        !hasOverlayPermission || !hasNotificationPermission -> "Grant Permissions to Continue"
+                        translationMode == TranslationMode.OFFLINE && isDownloadingModel -> "Preparing Offline Translation..."
+                        translationMode == TranslationMode.OFFLINE && !isModelDownloaded -> "Download Offline Model to Continue"
+                        else -> "Start ScreenTranslate"
+                    },
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = if (canStart) Color.White else Color(0xFF94A3B8)

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ScreenTranslate",
+  "version": "1.0.0",
+  "description": "Select text inside an image and translate it over the original.",
+  "permissions": ["contextMenus", "storage", "activeTab", "tabs", "scripting"],
+  "host_permissions": [
+    "https://clients5.google.com/*",
+    "https://api.ocr.space/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ScreenTranslate",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "popup.html"
+}
