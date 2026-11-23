@@ -37,6 +37,10 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -64,6 +68,9 @@ class OverlayService : Service() {
     private var currentOverlayView: TranslationOverlayView? = null
     private var selectionOverlayView: SelectionOverlayView? = null
     private var isFloatingButtonHidden = false
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activeTranslationJob: Job? = null
+    private var translationSession = 0L
 
     private var screenWidth = 0
     private var screenHeight = 0
@@ -80,6 +87,8 @@ class OverlayService : Service() {
             .build()
         Translation.getClient(options)
     }
+
+    private val translationRepository by lazy { TranslationRepository(translator) }
 
     override fun onBind(intent: Intent?) = null
 
@@ -287,17 +296,25 @@ class OverlayService : Service() {
 
     private fun startAreaSelection() {
         if (selectionOverlayView != null) return
+        invalidateActiveTranslation()
         removeCurrentOverlay()
         floatingButton?.hideTemporarily()
-        selectionOverlayView = SelectionOverlayView(this) { selection ->
-            removeSelectionOverlay()
-            if (selection == null) {
-                Toast.makeText(this, "Select a larger area to translate", Toast.LENGTH_SHORT).show()
+        selectionOverlayView = SelectionOverlayView(
+            context = this,
+            onSelectionFinished = { selection ->
+                removeSelectionOverlay()
+                if (selection == null) {
+                    Toast.makeText(this, "Select a larger area to translate", Toast.LENGTH_SHORT).show()
+                    restoreFloatingButtonIfNeeded()
+                } else {
+                    captureAndTranslate(selection)
+                }
+            },
+            onSelectionCancelled = {
+                removeSelectionOverlay()
                 restoreFloatingButtonIfNeeded()
-            } else {
-                captureAndTranslate(selection)
             }
-        }
+        )
         val layoutFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         } else {
@@ -341,6 +358,12 @@ class OverlayService : Service() {
             }
         }
         currentOverlayView = null
+    }
+
+    private fun invalidateActiveTranslation() {
+        activeTranslationJob?.cancel()
+        activeTranslationJob = null
+        translationSession++
     }
 
     private data class ProcessedBlock(
@@ -393,11 +416,14 @@ class OverlayService : Service() {
     }
 
     private fun captureAndTranslate(selection: RectF? = null) {
+        invalidateActiveTranslation()
+        val session = translationSession
         removeCurrentOverlay()
         floatingButton?.hideTemporarily()
 
         Handler(Looper.getMainLooper()).postDelayed({
             try {
+                if (session != translationSession) return@postDelayed
                 val image = imageReader?.acquireLatestImage()
                 if (image == null) {
                     Toast.makeText(this, "Try again, capturing frame...", Toast.LENGTH_SHORT).show()
@@ -453,6 +479,10 @@ class OverlayService : Service() {
                 val inputImage = InputImage.fromBitmap(capturedBitmap, 0)
                 textRecognizer.process(inputImage)
                     .addOnSuccessListener { visionText ->
+                        if (session != translationSession) {
+                            capturedBitmap.recycle()
+                            return@addOnSuccessListener
+                        }
                         val blocks = visionText.textBlocks
                         if (blocks.isEmpty()) {
                             Toast.makeText(this, "No text detected on screen", Toast.LENGTH_SHORT).show()
@@ -477,9 +507,9 @@ class OverlayService : Service() {
                             Pair(screenRect, enhancedText)
                         }
 
-                        // Translate each merged OCR block using the user's selected mode.
-                        CoroutineScope(Dispatchers.Main).launch {
-                            val translatedItems = mutableListOf<TranslatedItem>()
+                        // Translate independent paragraphs concurrently. A session check prevents a
+                        // late result from being shown after the user starts another capture.
+                        activeTranslationJob = serviceScope.launch {
                             val translationMode = if (
                                 getSharedPreferences(TranslationMode.PREFERENCES_NAME, Context.MODE_PRIVATE)
                                     .getString(TranslationMode.PREFERENCE_MODE, TranslationMode.ONLINE.name) ==
@@ -489,41 +519,37 @@ class OverlayService : Service() {
                             } else {
                                 TranslationMode.ONLINE
                             }
-                            var hadTranslationFailure = false
-                            
-                            for ((rect, originalText) in itemsToTranslate) {
-                                try {
-                                    val arabicText = if (translationMode == TranslationMode.OFFLINE) {
-                                        translator.translate(originalText).await()
-                                    } else {
-                                        GoogleTranslateService.translate(originalText)
-                                            ?: translator.translate(originalText).await()
-                                    }
-                                    
-                                    translatedItems.add(
+                            val translatedItems = itemsToTranslate.map { (rect, originalText) ->
+                                async(Dispatchers.IO) {
+                                    try {
+                                        val result = translationRepository.translate(originalText, translationMode)
                                         TranslatedItem(
                                             rect = rect,
                                             originalText = originalText,
-                                            translatedText = arabicText ?: originalText,
+                                            translatedText = result.text,
                                             imageWidth = screenWidth,
                                             imageHeight = screenHeight
                                         )
-                                    )
-                                } catch (e: Exception) {
-                                    Log.e(Constants.LOG_TAG, "ST: Translation failed", e)
-                                    hadTranslationFailure = true
-                                    translatedItems.add(
+                                    } catch (e: Exception) {
+                                        Log.e(Constants.LOG_TAG, "ST: Translation failed", e)
                                         TranslatedItem(
                                             rect = rect,
                                             originalText = originalText,
                                             translatedText = originalText,
                                             imageWidth = screenWidth,
-                                            imageHeight = screenHeight
+                                            imageHeight = screenHeight,
+                                            translationFailed = true
                                         )
-                                    )
+                                    }
                                 }
+                            }.awaitAll()
+
+                            if (session != translationSession) {
+                                capturedBitmap.recycle()
+                                return@launch
                             }
-                            
+
+                            val hadTranslationFailure = translatedItems.any { it.translationFailed }
                             showTranslationOverlay(translatedItems)
                             if (hadTranslationFailure) {
                                 val message = if (translationMode == TranslationMode.OFFLINE) {
@@ -538,6 +564,7 @@ class OverlayService : Service() {
                         }
                     }
                     .addOnFailureListener { e ->
+                        if (session != translationSession) return@addOnFailureListener
                         Log.e(Constants.LOG_TAG, "ST: OCR failed", e)
                         Toast.makeText(this, "Text recognition failed: ${e.message}", Toast.LENGTH_SHORT).show()
                         restoreFloatingButtonIfNeeded()
@@ -599,6 +626,7 @@ class OverlayService : Service() {
         requestQSTileUpdate()
         removeCurrentOverlay()
         removeSelectionOverlay()
+        invalidateActiveTranslation()
         try {
             floatingButton?.let { windowManager?.removeView(it) }
         } catch (_: Exception) {}

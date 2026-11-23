@@ -20,7 +20,8 @@ data class TranslatedItem(
     val originalText: String,
     val translatedText: String,
     val imageWidth: Int = 0,
-    val imageHeight: Int = 0
+    val imageHeight: Int = 0,
+    val translationFailed: Boolean = false
 )
 
 class TranslationOverlayView(
@@ -48,6 +49,16 @@ class TranslationOverlayView(
         color = Color.parseColor("#8060A5FA")
         style = Paint.Style.FILL
     }
+    private val closePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E60F172A")
+    }
+    private val closeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textAlign = Paint.Align.CENTER
+    }
+    private val originalLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#93C5FD")
+    }
 
     private val location = IntArray(2)
 
@@ -56,6 +67,9 @@ class TranslationOverlayView(
     private var initialTouchY = 0f
     private var initialScrollY = 0f
     private var isScrolling = false
+    private var expandedItemIndex: Int? = null
+    private val renderedCards = mutableListOf<Pair<RectF, Int>>()
+    private var closeBounds = RectF()
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -100,13 +114,14 @@ class TranslationOverlayView(
 
         val density = context.resources.displayMetrics.density
         val padding = 8f * density
+        renderedCards.clear()
 
         canvas.save()
         canvas.translate(0f, -currentScrollY)
 
         var lastBottomY = 0f
 
-        for (item in items) {
+        for ((index, item) in items.withIndex()) {
             val imgW = if (item.imageWidth > 0) item.imageWidth.toFloat() else viewWidth
             val imgH = if (item.imageHeight > 0) item.imageHeight.toFloat() else viewHeight
 
@@ -166,6 +181,20 @@ class TranslationOverlayView(
                 drawBottom = drawTop + requiredHeight
             }
 
+            val isExpanded = expandedItemIndex == index
+            val originalLayout = if (isExpanded) {
+                textPaint.textSize = 12f * density
+                StaticLayout.Builder.obtain(item.originalText, 0, item.originalText.length, textPaint, availableWidth)
+                    .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                    .setIncludePad(true)
+                    .build()
+            } else {
+                null
+            }
+            if (originalLayout != null) {
+                drawBottom += originalLayout.height + 30f * density
+            }
+
             // If card extends below screen bottom, attempt to shift drawTop upwards if space from previous card allows
             if (drawBottom > viewHeight && drawTop > (lastBottomY + 4f * density)) {
                 val overflow = drawBottom - viewHeight
@@ -189,10 +218,29 @@ class TranslationOverlayView(
             staticLayout.draw(canvas)
             canvas.restore()
 
+            if (originalLayout != null) {
+                originalLabelPaint.textSize = 11f * density
+                canvas.drawText("Original", drawRect.left + padding, drawRect.top + padding + staticLayout.height + 16f * density, originalLabelPaint)
+                canvas.save()
+                canvas.translate(drawRect.left + padding, drawRect.top + padding + staticLayout.height + 20f * density)
+                originalLayout.draw(canvas)
+                canvas.restore()
+            }
+
+            renderedCards.add(drawRect to index)
+
             lastBottomY = drawBottom
         }
 
         canvas.restore()
+
+        // The close action remains fixed while translated cards may scroll beneath it.
+        val closeWidth = 76f * density
+        val closeHeight = 38f * density
+        closeBounds = RectF(viewWidth - closeWidth - 12f * density, 12f * density, viewWidth - 12f * density, 12f * density + closeHeight)
+        canvas.drawRoundRect(closeBounds, 19f * density, 19f * density, closePaint)
+        closeTextPaint.textSize = 13f * density
+        canvas.drawText("Close", closeBounds.centerX(), closeBounds.centerY() + closeTextPaint.textSize / 3f, closeTextPaint)
 
         // Calculate max vertical scroll range based on total rendered content height.
         // Add extra bottom padding when content reaches lower screen portion so text near bottom

@@ -320,7 +320,7 @@ fun ScreenTranslateOnboarding(
                         Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
                             Text("Online (recommended)", color = Color.White, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Uses Google Translate first; recognized text is sent online. Falls back to the on-device model.",
+                                "May improve some results, but needs internet and sends recognized text online. It is not required.",
                                 fontSize = 12.sp,
                                 color = Color(0xFF94A3B8)
                             )
@@ -337,9 +337,9 @@ fun ScreenTranslateOnboarding(
                             onClick = { chooseTranslationMode(TranslationMode.OFFLINE) }
                         )
                         Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
-                            Text("Offline (private)", color = Color.White, fontWeight = FontWeight.SemiBold)
+                            Text("Offline (free & private)", color = Color.White, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Uses the downloaded on-device model only; recognized text is not sent for translation.",
+                                "Free after the one-time language-pack download. Works without an API key or internet.",
                                 fontSize = 12.sp,
                                 color = Color(0xFF94A3B8)
                             )

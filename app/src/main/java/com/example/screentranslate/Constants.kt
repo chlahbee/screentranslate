@@ -32,3 +32,9 @@ enum class TranslationMode {
         const val PREFERENCE_MODE = "translation_mode"
     }
 }
+
+/** A translation result always carries enough information for the UI to be honest about it. */
+data class TranslationResult(
+    val text: String,
+    val usedOnlineService: Boolean
+)
